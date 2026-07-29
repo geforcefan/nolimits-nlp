@@ -1,0 +1,70 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: linux
+          - runner: macos-latest
+            target: macos
+          - runner: windows-latest
+            target: windows
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: zlib on linux
+        if: matrix.target == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+
+      - name: zlib on windows
+        if: matrix.target == 'windows'
+        run: vcpkg install zlib:x64-windows-static
+
+      - name: configure
+        if: matrix.target != 'windows'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: configure on windows
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          Write-Host "vcpkg root is $env:VCPKG_INSTALLATION_ROOT"
+          $toolchain = "$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          if (-not (Test-Path $toolchain)) { $toolchain = "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" }
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="$toolchain" -DVCPKG_TARGET_TRIPLET=x64-windows-static -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: build
+        run: cmake --build build --config Release -j
+
+      - name: archive
+        if: matrix.target != 'windows'
+        run: |
+          tar -czf nolimits-nlp-${{ matrix.target }}.tar.gz -C build nolimits-nlp
+          shasum -a 256 nolimits-nlp-${{ matrix.target }}.tar.gz > nolimits-nlp-${{ matrix.target }}.tar.gz.sha256
+
+      - name: archive on windows
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          Compress-Archive build/Release/nolimits-nlp.exe nolimits-nlp-windows.zip
+          (Get-FileHash nolimits-nlp-windows.zip -Algorithm SHA256).Hash | Out-File -Encoding ascii nolimits-nlp-windows.zip.sha256
+
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: nolimits-nlp-${{ matrix.target }}.*
